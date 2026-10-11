@@ -1,0 +1,138 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: ci-cd-pipeline
+  namespace: argo
+spec:
+  serviceAccountName: pipeline-runner
+  entrypoint: ci-cd
+  arguments:
+    parameters:
+      - name: repo-url
+        value: https://github.com/yash-baviskar-dsw/argo-workflow-pipelines.git
+      - name: git-revision
+        value: main
+      - name: image-tag
+        value: dev-001
+      - name: backend-image
+        value: ghcr.io/yash-baviskar-dsw/argo-workflow-pipelines-backend
+      - name: frontend-image
+        value: ghcr.io/yash-baviskar-dsw/argo-workflow-pipelines-frontend
+  volumes:
+    - name: ghcr-auth
+      secret:
+        secretName: ghcr-push-secret
+        items:
+          - key: .dockerconfigjson
+            path: config.json
+  templates:
+    - name: ci-cd
+      dag:
+        tasks:
+          - name: test-backend
+            template: test-backend
+          - name: build-backend
+            dependencies: [test-backend]
+            template: build-image
+            arguments:
+              parameters:
+                - name: component
+                  value: backend
+                - name: image
+                  value: "{{workflow.parameters.backend-image}}"
+          - name: build-frontend
+            dependencies: [test-backend]
+            template: build-image
+            arguments:
+              parameters:
+                - name: component
+                  value: frontend
+                - name: image
+                  value: "{{workflow.parameters.frontend-image}}"
+          - name: deploy
+            dependencies: [build-backend, build-frontend]
+            template: deploy
+
+    - name: test-backend
+      container:
+        image: python:3.12-slim
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            apt-get update
+            apt-get install -y --no-install-recommends git
+            rm -rf /var/lib/apt/lists/*
+            git clone --depth 1 --branch "{{workflow.parameters.git-revision}}" "{{workflow.parameters.repo-url}}" /tmp/repo
+            cd /tmp/repo/backend
+            python -m pip install --no-cache-dir -r requirements-dev.txt
+            python -m pytest -v
+
+    - name: build-image
+      inputs:
+        parameters:
+          - name: component
+          - name: image
+      container:
+        image: quay.io/containers/buildah:v1.45.0
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            if command -v dnf >/dev/null 2>&1; then dnf install -y git && dnf clean all;
+            elif command -v microdnf >/dev/null 2>&1; then microdnf install -y git && microdnf clean all;
+            else echo 'No supported package manager found to install git' >&2; exit 1; fi
+            git clone --depth 1 --branch "{{workflow.parameters.git-revision}}" "{{workflow.parameters.repo-url}}" /workspace/repo
+            cd /workspace/repo
+            IMAGE="{{inputs.parameters.image}}"
+            TAG="{{workflow.parameters.image-tag}}"
+            buildah --storage-driver=vfs bud --format=docker -f "{{inputs.parameters.component}}/Dockerfile" -t "${IMAGE}:${TAG}" .
+            buildah --storage-driver=vfs push --authfile /auth/config.json "${IMAGE}:${TAG}"
+        securityContext:
+          privileged: true
+        volumeMounts:
+          - name: ghcr-auth
+            mountPath: /auth
+            readOnly: true
+
+    - name: deploy
+      container:
+        image: alpine/helm:4.3.0
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            apk add --no-cache git
+            git clone --depth 1 --branch "{{workflow.parameters.git-revision}}" "{{workflow.parameters.repo-url}}" /tmp/repo
+
+            SA_DIR=/var/run/secrets/kubernetes.io/serviceaccount
+            TOKEN="$(cat "${SA_DIR}/token")"
+            KUBECONFIG_FILE=/tmp/kubeconfig
+            cat > "${KUBECONFIG_FILE}" <<KUBECONFIG
+            apiVersion: v1
+            kind: Config
+            clusters:
+              - name: in-cluster
+                cluster:
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS:-443}
+                  certificate-authority: ${SA_DIR}/ca.crt
+            users:
+              - name: pipeline-runner
+                user:
+                  token: ${TOKEN}
+            contexts:
+              - name: demo
+                context:
+                  cluster: in-cluster
+                  user: pipeline-runner
+                  namespace: demo
+            current-context: demo
+            KUBECONFIG
+            export KUBECONFIG="${KUBECONFIG_FILE}"
+
+            helm upgrade --install demo /tmp/repo/charts/demo \
+              --namespace demo \
+              --wait --timeout 5m \
+              --set-string backend.image.repository="{{workflow.parameters.backend-image}}" \
+              --set-string frontend.image.repository="{{workflow.parameters.frontend-image}}" \
+              --set-string imageTag="{{workflow.parameters.image-tag}}"

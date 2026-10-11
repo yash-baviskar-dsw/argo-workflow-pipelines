@@ -1,0 +1,47 @@
+imageTag: dev-001
+imagePullSecrets:
+  - ghcr-pull-secret
+
+backend:
+  image:
+    repository: ghcr.io/yash-baviskar-dsw/argo-workflow-pipelines-backend
+    pullPolicy: Always
+  service:
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+frontend:
+  image:
+    repository: ghcr.io/yash-baviskar-dsw/argo-workflow-pipelines-frontend
+    pullPolicy: Always
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+postgres:
+  image: postgres:16-alpine
+  existingSecret: demo-postgres-secret
+  database: notesdb
+  username: notesapp
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

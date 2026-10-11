@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "demo.fullname" . }}-nginx
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+data:
+  default.conf: |-
+{{ .Files.Get "files/nginx.conf" | indent 4 }}

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workflow Lab</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; background: #f3f6fb; color: #172033; }
+    main { max-width: 760px; margin: 48px auto; padding: 0 20px; }
+    .hero { padding: 28px; border-radius: 18px; color: #fff; background: linear-gradient(125deg, #172554, #2563eb); }
+    .eyebrow { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; opacity: .8; }
+    h1 { margin: 10px 0; font-size: clamp(2rem, 6vw, 3rem); }
+    .panel { margin-top: 18px; padding: 22px; background: #fff; border: 1px solid #e1e7f0; border-radius: 16px; box-shadow: 0 10px 24px #1725540a; }
+    .muted { color: #5c6880; }
+    .pill { display: inline-block; padding: 5px 10px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-size: .85rem; }
+    form { display: flex; gap: 10px; margin-top: 14px; }
+    input { flex: 1; min-width: 0; padding: 11px 12px; border: 1px solid #cbd5e1; border-radius: 9px; font: inherit; }
+    button { border: 0; border-radius: 9px; padding: 11px 16px; color: white; background: #1d4ed8; font: inherit; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    ul { padding-left: 20px; margin-bottom: 0; }
+    li { padding: 7px 0; overflow-wrap: anywhere; }
+    #message { min-height: 1.3em; }
+    @media (max-width: 540px) { form { flex-direction: column; } button { width: 100%; } main { margin-top: 22px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">Argo Workflows · CI/CD lab</div>
+      <h1>Workflow Lab</h1>
+      <p>Ship a tiny app through tests, parallel image builds, and a Kubernetes deployment.</p>
+      <span class="pill" id="version">Loading API version…</span>
+    </section>
+
+    <section class="panel">
+      <h2>Save a note</h2>
+      <p class="muted">This form sends a POST request through Nginx to FastAPI, which stores the note in PostgreSQL.</p>
+      <form id="note-form">
+        <input id="note-text" maxlength="500" required placeholder="e.g. My first Argo DAG succeeded">
+        <button id="save-button" type="submit">Save note</button>
+      </form>
+      <p id="message" class="muted" role="status"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Saved notes</h2>
+      <p class="muted">Newest first. Refresh the page to prove the data survives an app restart.</p>
+      <ul id="notes"><li class="muted">Loading notes…</li></ul>
+    </section>
+  </main>
+  <script>
+    const versionEl = document.querySelector('#version');
+    const notesEl = document.querySelector('#notes');
+    const messageEl = document.querySelector('#message');
+    const form = document.querySelector('#note-form');
+    const input = document.querySelector('#note-text');
+    const button = document.querySelector('#save-button');
+
+    async function loadVersion() {
+      try {
+        const response = await fetch('/api/version');
+        if (!response.ok) throw new Error('API returned ' + response.status);
+        const data = await response.json();
+        versionEl.textContent = `${data.service} · version ${data.version}`;
+      } catch (error) {
+        versionEl.textContent = 'API unavailable';
+      }
+    }
+
+    async function loadNotes() {
+      try {
+        const response = await fetch('/api/notes');
+        if (!response.ok) throw new Error('API returned ' + response.status);
+        const notes = await response.json();
+        notesEl.replaceChildren();
+        if (!notes.length) {
+          const empty = document.createElement('li');
+          empty.className = 'muted';
+          empty.textContent = 'No notes yet. Add the first one above.';
+          notesEl.append(empty);
+          return;
+        }
+        for (const note of notes) {
+          const item = document.createElement('li');
+          const date = new Date(note.created_at).toLocaleString();
+          item.textContent = `#${note.id} · ${note.text} — ${date}`;
+          notesEl.append(item);
+        }
+      } catch (error) {
+        notesEl.replaceChildren();
+        const item = document.createElement('li');
+        item.textContent = 'Could not load notes. Check the backend and PostgreSQL pods.';
+        notesEl.append(item);
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      button.disabled = true;
+      messageEl.textContent = 'Saving…';
+      try {
+        const response = await fetch('/api/notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+        input.value = '';
+        messageEl.textContent = 'Saved to PostgreSQL.';
+        await loadNotes();
+      } catch (error) {
+        messageEl.textContent = `Could not save: ${error.message}`;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    loadVersion();
+    loadNotes();
+  </script>
+</body>
+</html>
